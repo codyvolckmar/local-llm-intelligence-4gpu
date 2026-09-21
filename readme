@@ -1,0 +1,97 @@
+Local LLM Intelligence Report — 4 GPU Tiers
+Hunting the best local-model intelligence (reasoning + coding/agentic + long-context document work) attainable on an RTX 3090, RTX 4090, RTX 5090, and RTX 6000 Ada (48 GB). Speeds are memory-bandwidth-scaled estimates from measured 3090 figures — decode is bandwidth-bound, so bandwidth ratio is the honest scaling law. Marked °.
+
+What each card actually changes
+These four cards sit in three distinct capability brackets, not four. The 4090 does not raise the intelligence ceiling vs the 3090 (same 24 GB) — it only speeds it up slightly. The real steps up are the 5090 at 32 GB and the RTX 6000 Ada at 48 GB, and they jump different axes: the 5090 is the speed / full-context / NVFP4 card; the 6000 Ada is the capacity card that finally unlocks bigger models and higher quant precision — the biggest raw-intelligence gain of the group.
+
+3090 — value baseline
+24GB · Ampere · ~936 GB/s · 0.18–0.22 $/hr · no FP8 tensors
+4090 — speed-only bump
+24GB · Ada · ~1008 GB/s (+8%) · 0.22–0.27 $/hr · FP8 tensors
+5090 — speed + NVFP4
+32GB · Blackwell · ~1792 GB/s (+91%) · 0.30–0.40 $/hr · native NVFP4 (needs vLLM/TensorRT)
+RTX 6000 Ada — capacity
+48GB · Ada · ~960 GB/s · ~0.70 $/hr · NVLink pairs to 96GB · no NVFP4 · workstation card
+6000 Ada note: at ~960 GB/s it decodes like a 3090-class card for same-size models, but its whole value is 2×-the-memory — bigger models, higher quant, longer context — and NVLink can pair two for 96 GB. Its ~0.70 $/hr running cost is the highest of the four, which matters when comparing $/token against cheap frontier APIs (see the frontier section). A 5090 NVFP4 stack can be ~3× faster (Blackwell W4A4), but only outside Ollama via vLLM/TensorRT-LLM.
+
+RTX 3090 (24GB) — the 3B-active MoE tier
+Ceiling: 27–35B-class. Cost: 0.18–0.22 $/hr. Full 262K: only with q4_0/q8_0 KV-cache quant; the 35B MoEs top out ~224–262K tight. Intelligence ceiling: Qwen3.8-27B (reasoning) / Qwen3.5-35B-A3B (262K+speed) / Ornith-1.5-35B-A3B (agentic coding) — pick by flavor, all fit.
+Model	Type	Text-only	Ctx	262K fit	est t/s	$/1M	Intelligence verdict
+Qwen3.8-27B	27B dense·hybrid	No	262K	q4_0 KV only	55°	0.40°	Reasoning Highest knowledge/reasoning of the class (GPQA≈89); strongest all-round synth for finance/doc work.
+Qwen3.5-35B-A3B	35B MoE·3B act	No	262K	Yes	110°	0.20°	Balanced Best documented full-262K on 24GB; 100–122 t/s with q8_0 KV. Great speed/fidelity balance.
+Ornith-1.5-35B-A3B	35B MoE·3B act	~No	262K	~224–256K	110°	0.20°	Agentic Strongest agentic coder (SWE-bench 79); highest actionable coding IQ on this card.
+Nemotron 3.5 Lightning	30B MoE·Mamba-2	Yes	1M	Yes, cheap	120°	0.18°	Speed Text-only, fastest, 262K nearly free — but Mamba collapses exact-number recall. Weakest for precise finance.
+DeepSeek-R1:32b	32B dense	Yes	128K	No 262K	35°	0.63°	Reasoning Deepest chain-of-thought + math per byte; the specialist for hard valuation on a bounded doc.
+GLM-4.7-Flash	30B MoE	Yes	~198K	below 262K	45°	0.49°	Agentic Strong agent-per-GB, but context misses the long-window brief.
+Smartest pick on 3090: Qwen3.8-27B for broad reasoning/doc work; swap to Ornith-1.5-35B-A3B when the task is tool/agent-driven. Keep DeepSeek-R1:32b in the rotation for math-heavy sub-problems.
+
+RTX 4090 (24GB) — same ceiling, ~1.1× faster
+Ceiling: identical to the 3090 — same 24 GB VRAM, so no model is unlocked that wasn't already available. What improves: ~8% bandwidth + Ada FP8 tensor cores help dense/quant paths → roughly 10–25% faster decode, mostly on dense models. Cost: 0.22–0.27 $/hr (higher TDP). Intelligence = exactly the same list as the 3090, every model just runs a hair faster and hits 65+ t/s more comfortably.
+Model	Type	Ctx	262K fit	est t/s	$/1M	Gain over 3090
+Qwen3.8-27B	27B dense·hybrid	262K	q4_0 KV	65°	0.37°	~+18%; now reliably ≥65 t/s — the main reason to pick a 4090.
+Qwen3.6-35B-A3B	35B MoE·3B act	256K	~256K / Q5 tight	130°	0.19°	~+15%; faster agentic MoE than 3090.
+Ornith-1.5-35B-A3B	35B MoE·3B act	262K	~256K	128°	0.19°	~+16%; still the coding-IQ leader, slightly more headroom.
+Nemotron 3.5 Lightning	30B MoE	1M	Yes	140°	0.17°	~+15%; fastest 262K buffer, same exact-recall caveat.
+DeepSeek-R1:32b / R1-FP8	32B dense	128K	No	42°	0.52°	~+20% (Ada FP8 helps dense); still the reasoning specialist.
+Honest take: if you already have a 3090, a 4090 is a weak upgrade — the intelligence ceiling does not move. Buy it only for the speed margin at 65+ t/s, not for capability.
+
+RTX 5090 (32GB, Blackwell) — full context at high quant, plus NVFP4
+Ceiling: still 27–40B-class at 4-bit (a 70B Q4 ≈ 40 GB still exceeds 32 GB), but two things change: (1) ~1.9× bandwidth → near-2× decode speed, and (2) 32 GB VRAM means the 30–35B MoEs run at Q5/Q6-Q8 with the full 262K window — no KV gymnastics, no compression tradeoffs. NVFP4 (Blackwell) adds up to ~3× more when run via vLLM/TensorRT-LLM — not Ollama/GGUF. Cost: 0.30–0.40 $/hr — best tokens-per-dollar of the group.
+Model	Type	Ctx	32GB fit	est t/s (GGUF)	NVFP4 t/s	$/1M	Intelligence verdict
+Qwen3.8-27B	27B dense·hybrid	262K	Yes — Q8 full 262K	105°	n/a	0.30°	Reasoning Full 262K at Q8, comfortably ≥100 t/s — a true quality+context+speed win.
+Qwen3.6-35B-A3B	35B MoE·3B act	256K	Yes — Q5/Q6 full	220°	—	0.14°	Balanced Q5+ at full window and ~2× the 3090 speed; strong default.
+Nemotron Lightning NVFP4	30B MoE	1M	Yes	—	~3×°	low°	Speed Blackwell V4 path — fastest possible; still Mamba exact-recall caveat for finance.
+Laguna XS 2.1 (NVFP4)	33B MoE·3B act	262K	Yes	170°	~3×°	0.14°	Agentic Text-only, native 262K, NVFP4 quant available — clean text-only 262K pick.
+Gemma-4 26B-A4B	26B MoE·4B act	262K	Yes	230°	—	0.13°	Balanced Verified flat 262K on 24GB; on 32GB runs faster with headroom.
+DeepSeek-V4 class	1.6T MoE·FP4	1M	no (≥400GB)	—	—	—	Does NOT fit — V4 NVFP4 is datacenter-scale, not a 32GB local model.
+Smartest pick on 5090: Qwen3.8-27B at Q8/full-262K for layered reasoning/doc synthesis, or Qwen3.6-35B-A3B at Q5–Q6 for the MoE speed+context pair. Get the NVFP4 win only if you adopt vLLM/TensorRT — stay on Ollama and the 5090 is just a faster 32GB card.
+
+Where local intelligence actually lives — cross-card verdict
+Card	VRAM	Intelligence ceiling	Best model (IQ)	Best at doc/coding	Max est t/s (good IQ model)	When it wins
+3090	24GB	27–35B	Qwen3.8-27B / Ornith-1.5-35B-A3B	Qwen3.5-35B-A3B (262K)	~110	Value; budget; fine for most single-doc work.
+4090	24GB	27–35B (same)	same as 3090	same as 3090	~130	Only when you want the speed margin, not more IQ.
+5090	32GB	27–40B + NVFP4	Qwen3.6-35B-A3B (Q5–Q6)	Qwen3.8-27B (Q8 full 262K)	~220 (to ~3× NVFP4)	Speed + full-context + (if vLLM/TensorRT) the whole FP4 stack.
+RTX 6000 Ada	48GB	up to 80B-MoE / 70B-dense	Qwen3-Coder-Next 80B MoE	35B MoEs @ Q8 or 27B @ Q8 full	~105 (MoE); ~45 (70B)	Biggest IQ gain; fits a real 80B brain; multi-document/depth work; NVLink→96GB.
+Local vs the open-weight frontier — cost & capability reality check
+These are the models you can't fit locally on these cards — but they define what "top open-weight intelligence" means in 2026 and what the API fallback costs.
+
+Frontier open-weight model	Params	Ctx	Local on our cards?	GPQA	SWE-bench V	API (in / out per 1M)	Why it matters
+Kimi K3	2.8T MoE	1M	No — weights not yet posted; cluster-scale	~top open	~93.4 (Vals AI)	$2.85 / $14.25	Highest open claim on SWE-bench; brief benchmark ceiling.
+DeepSeek V4-Pro	1.6T / 49B act	1M	No — needs ~8× H100 (≥400GB)	~90	~80.6	$0.66–1.32 / $1.98–3.96	Contest-grade coder (Codeforces 3206, LiveCodeBench 93.5).
+GLM-5.2 #1 open	744B / 40B act	1M	No — multi-GPU	91.2	~78.7 (Epoch)	$1.40 / $4.40	#1 open on AA Intelligence Index (51); near-saturates olympiad math (AIME 99.2).
+DeepSeek V4-Flash	284B / 13B act	1M	No — 142GB even at 4-bit	—	~76–78	$0.14 / $0.28	Rock-bottom price floor; cheaper per token than any local card.
+Qwen3-Coder-Next 80B	80B / ~3B act	long	Yes — ~46GB unified, one 48GB card	—	~70.6	local	The frontier-adjacent model that actually runs on your hardware.
+Local-context reference: Qwen3.6-27B hits ~77.2 SWE-bench V (beats models 15× bigger), Ornith-1.5-35B-A3B ~79 agentic — but these are harness/dataset comparisons, not directly column-comparable to the frontier row. The point stands: the frontier open models lead by a few points on coding and clearly ahead on hard reasoning + 1M context — at 10–30× the size, reachable only via API.
+
+Cost: local is no longer automatically cheaper
+Path	$/1M output (approx)	$/100M tokens	When it wins
+DeepSeek V4-Flash (API)	$0.28	~$28	Cheapest per token, period — but hosted, data leaves you.
+GLM-5.2 (API)	$4.40	~$440	#1 open IQ, ~¼ of closed-frontier output price.
+Local 3090/4090 (24GB)	$0.20–0.60	$20–60 + capped context	Cheap per token and private — but 27–35B ceiling.
+Local RTX 6000 Ada (48GB)	$1.8–5.5	$180–550 + electricity	Biggest local IQ, fully private — but at ~0.70 $/hr it's more per token than V4-Flash and near GLM API rates for equal tokens.
+The verdict that changes minds: electricity is no longer a slam-dunk saving. At 0.70 $/hr, a 6000 Ada burns ~$510/month running 24/7 and still costs more per token than the far smarter DeepSeek V4-Flash API. Local's real wins today are privacy, data residency, unlimited volume, no rate limits, no lock-in — not raw $/token. In late-2026 terms: local is a sovereignty play, and only a good cost play past roughly low-millions of output tokens/month where amortized electricity beats even DeepSeek's rate. The one thing no API gives you that the 48GB card does: the frontier-adjacent 80B brain in your own hands.
+
+The 48GB tier — RTX 6000 Ada and the family around it
+The 48GB "capacity" tier is the only real IQ jump. 48 GB fits the strongest model that runs on a single box — Qwen3-Coder-Next 80B MoE (~46GB, ~3B active, 262K+), SWE-bench ~70.6 — the frontier-adjacent brain none of the 24–32GB cards can touch. And it runs the 70B-dense class at Q4 plus the 30–35B MoEs at Q8 with a huge window. This is where "hunting intelligence" in local models actually pays.
+What 48GB runs (max IQ + speed)
+Model	Type	Ctx	48GB fit	est t/s (6000 Ada)	$/1M @ 0.70/hr	Intelligence verdict
+Qwen3-Coder-Next 80B	80B MoE·~3B act	262K+	Yes (~46GB)	~55°	~3.5°	Frontier Highest-IQ model that fits one box; MoE keeps decode fast. The answer to "max intelligence + speed on 48GB".
+70B dense @ Q4	GLM-5-class / R1-70B-distill / Llama-3.3-70B	128–256K	Yes (~40GB)	~30–45°	~4–5.5°	Reasoning Deepest reasoning-critical-chain locally; slower decode but real frontier-adjacent depth.
+Qwen3.6-35B-A3B @ Q8	35B MoE·3B act	256–262K	Yes — Q8 + full window	~105°	~1.85°	Balanced Sweet spot of precision + context + still-fast MoE decode; ~20GB spare for parallel or sidecar.
+Ornith-1.5-35B-A3B @ Q8	35B MoE	262K	Yes	~105°	~1.85°	Agentic Top agentic coder at high quant + full context — best coding IQ/GB on any card here.
+Dual small MoEs	two 9–14B sidecars	—	Yes (run 2 at once)	~65+ each°	—	Flex e.g. a Qwen3.5-9B fast researcher + an Ornith-9B agent, simultaneously — unique to 48GB.
+The 48GB card family
+Card	Arch	VRAM	Bandwidth	Run cost	FP8 inference	Notes
+RTX 6000 Ada PICK	Ada	48GB GDDR6 ECC	~960 GB/s	~0.70 $/hr	Good	Workstation card, full CUDA stack, 5-yr warranty; NVLink pairs two → 96GB = the path up to GLM-5-class. The pick for "intelligence on one card."
+RTX PRO 6000 Blackwell	Blackwell	96GB	HBM-class	higher	NVFP4 native	The capacity + NVFP4 step above: 96GB opens GLM-5.2 / V4-class. Not a 48GB card — it's the next bracket entirely.
+L40S	Ada	48GB GDDR6	~864 GB/s	0.25–0.35 $/hr	Best of 48GB class	FP8-tuned tensor cores → ~10–15% faster than the 6000 Ada on vLLM/TensorRT FP8 paths; server card (no display).
+Eligibility note: L40 and A6000 have been dropped — the 6000 Ada (960 GB/s, NVLink-pairable, workstation-grade) replaces them as the 48GB intelligence pick; the L40S is the FP8-speed alternative; the RTX PRO 6000 Blackwell (96GB, NVFP4) is the step to the frontier class. Weigh the 6000 Ada's ~0.70 $/hr against the L40S's lower power draw if $/token at high volume matters more than peak capacity.
+
+Bottom line — "we're hunting intelligence"
+Intelligence scales with VRAM, not the card name. 3090 = 4090 in capability; the 5090 adds ~one step (fidelity + speed); the RTX 6000 Ada is the true IQ jump — the only card here that fits an 80B-MoE/70B-dense brain.
+Max local intelligence per dollar → RTX 6000 Ada running Qwen3-Coder-Next 80B (max IQ + MoE speed), with 70B-dense and dual-MoE as alternates. NVLink adds a future 96GB path.
+If speed + full-context + modern stack matter more than ceiling → 5090, but only with vLLM/TensorRT so the NVFP4 path is real; on Ollama it's just a fast 32GB card.
+4090 over 3090 is almost never an intelligence upgrade. Spend the difference on capacity instead.
+Be honest about the frontier. GLM-5.2 / DeepSeek V4 are API-only at 10–30× your size and lead on hard reasoning + 1M context. At 0.70 $/hr even the 6000 Ada can cost more per token than DeepSeek V4-Flash — local is a privacy / sovereignty / unlimited-volume play now, and the only way to hold a frontier-adjacent brain entirely in your own hands.
+Model selection dominates hardware. Qwen3-Coder-Next 80B or Qwen3.8-27B (reasoning), Ornith-1.5-35B-A3B (agentic coding), DeepSeek-R1:32b (hard math). The card only decides how high a quant / how long a context you can afford it at — and on the 48GB card, whether you finally reach the 80B class.
+Assumptions & caveats: t/s are memory-bandwidth-scaled estimates from 3090-measured bases (6000 Ada ≈ 3090-class decode for same-size models). The 5090 NVFP4 column assumes vLLM/TensorRT-LLM; the GGUF column is the Ollama path. 6000 Ada run cost pegged at 0.70 $/hr (user-specified). Frontier API prices are list rates as of mid-2026; DeepSeek V4 uses off-peak/peak time-of-day billing. $/1M figures use each card's blended hourly window — verify fit/speed with ollama ps (100% GPU) or your engine's metrics on the actual card.
