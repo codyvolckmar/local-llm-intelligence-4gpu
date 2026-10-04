@@ -92,7 +92,7 @@ This is the **best new fit for the 48 GB and 96 GB tiers**: at 78B it lands squa
 | **4090** | Ada | 24 GB | 1008 GB/s | 1.08× | 0.22–0.27 $/hr | ❌ | FP8 tensors; speed-only bump |
 | **5090** | Blackwell | 32 GB | 1792 GB/s | 1.92× | 0.30–0.40 $/hr | ✅ NVFP4 | Speed + native FP4 |
 | **6000 Ada** | Ada | 48 GB | 960 GB/s | **1.03×** | ~0.70 $/hr | ❌ | Capacity card, NVLink→96 GB, 3090-class decode |
-| **PRO 6000 Blackwell** | Blackwell | **96 GB** | **1792 GB/s** | **1.92×** | ~0.80–1.10 $/hr | ✅ NVFP4 | **Capacity *and* speed** — new top tier |
+| **PRO 6000 Blackwell** | Blackwell | **96 GB** | **1792 GB/s** | **1.92×** | **1.29 $/hr** (rental) | ✅ NVFP4 | **Capacity *and* speed** — new top tier |
 
 ### What each card actually changes
 
@@ -250,9 +250,110 @@ These are the models you can't fit on these cards. **Prices verified against the
 | GLM-5.2 (API) | $8.00 | ~$800 | MIT-licensed 744B, 1M context, absurdly cheap input |
 | Local 3090/4090 (24 GB) | $0.20–0.60 | $20–60 | Cheap and private — but 27–35B ceiling |
 | Local 6000 Ada (48 GB) | $1.8–5.5 | $180–550 | Biggest local IQ at 48 GB, fully private |
-| Local PRO 6000 (96 GB) | ~$2.5–8 | $250–800 | **Best local IQ per card**; ~$0.80–1.10/hr to run |
+| Local PRO 6000 (96 GB) @25% util | ~$7–12 | $700–1,200 | **Best local IQ per card**; 1.29 $/hr to run |
+| Local PRO 6000 (96 GB) @100% util | ~$1.7–3.0 | $170–300 | Only competitive with cheap APIs if you saturate the card |
 
-**The verdict that changes minds:** at ~$0.80–1.10/hr, a PRO 6000 burns **~$576–790/month** running 24/7, and still costs more per output token than the cheapest APIs. Local's real wins are **privacy, data residency, unlimited volume, no rate limits, no lock-in** — not raw $/token. It's a sovereignty play that only becomes a cost play past roughly the low-millions of output tokens per month.
+### At $1.29/hr, utilisation is the whole game
+
+At the real rental rate, idle VRAM is pure burn. **Utilisation — not which card or model you pick — decides whether this is cheaper than an API:**
+
+| Model | 5% util | 25% util | 100% util |
+|---|---|---|---|
+| Laguna XS 2.1 @NVFP4 (~210 t/s) | $34.13 | **$6.83** | $1.71 |
+| Kolibri-1 @NVFP4 (~200 t/s) | $35.83 | **$7.17** | $1.79 |
+| Qwen3-Coder-Next @NVFP4 (~200 t/s) | $35.83 | $7.17 | $1.79 |
+| 35B-A3B @Q8 (~120 t/s) | $59.72 | $11.94 | $2.99 |
+| Nemotron 3 Super @NVFP4 (~55 t/s) | $130.30 | $26.06 | $6.52 |
+| Qwen3.8-27B @BF16 (~30 t/s) | $238.89 | $47.78 | $11.94 |
+
+At 25% utilisation, **only the ~200 t/s NVFP4 MoEs beat any API** (GLM-5.2's $8.00 output). Nothing beats GLM-5.3 Flash ($0.50) or DeepSeek V4 Flash ($1.28) unless you are **saturated**, where Laguna XS at $1.71 is roughly at parity.
+
+**The honest conclusion at $1.29/hr:** rent **on demand, not 24/7**. A PRO 6000 idle for 20 hours a day burns ~$775/month for nothing. If you can batch into a few hours a day, local wins on cost. If your workload is continuous, the cheap APIs win and the PRO 6000 is a sovereignty purchase. Monthly burn: 24/7 = **$942**, 12h/day = **$471**, 8h/day business = **$322**.
+
+**The verdict that changes minds:** at **$1.29/hr**, a PRO 6000 burns **~$942/month** running 24/7, and at realistic 10–30% utilisation still costs more per output token than GLM-5.3 Flash or DeepSeek V4 Flash. Local's real wins are **privacy, data residency, unlimited volume, no rate limits, no lock-in** — not raw $/token. Treat it as a sovereignty purchase, and switch it on when you need it rather than leaving it idle.
+
+---
+
+## Reasoning effort, context, and signal loss
+
+The other half of running a local model: what `reasoning_effort` actually does, how it mutates your context, and where signal gets lost.
+
+### There are three different mechanisms, and they are not interchangeable
+
+| Mechanism | How it works | Reliability |
+|---|---|---|
+| `chat_template_kwargs.reasoning_effort` | A **prompt instruction** — the template tells the model "think briefly" or "think hard". No hard cap. | Soft. Model may ignore it. |
+| `thinking_token_budget` | vLLM **logits processor forcibly injects `reasoning_end_str`** once the count is hit. | Hard cap, but has bugs (see below). |
+| `reasoning_level` | Soft limiting, used by gpt-oss. | Soft. |
+
+⚠️ **They conflict.** Qwen's own client code has repeated fixes for this: DashScope *rejects* `reasoning_effort` combined with `thinking_budget`, and `qwen-code` now drops `enable_thinking`/`thinking_budget` when an effort tier is set. **Pick one knob and set it explicitly** — the ambiguity between `enable_thinking`, `thinking_budget` and `reasoning_effort` is itself a source of silent signal loss.
+
+### The finding that matters most: highest effort is the *least* reliable
+
+Open bug [QwenLM/Qwen3.8#216](https://github.com/QwenLM/Qwen3.8/issues/216) (opened 2026-08-19, ~1,000 test calls). Qwen3.8-27B returns an **empty `content` field with `finish_reason: "stop"`** — it thinks and then emits nothing:
+
+| Setting | Failure rate |
+|---|---|
+| ⛔ `reasoning_effort: xhigh` (**the default**) | **38%** |
+| ✅ `reasoning_effort: low` / `medium` | **8%** |
+| ⛔ `temperature: 0` | **12/12 — 100%** |
+| ⛔ `repetition_penalty` outside 1.05–1.10 | below → **100%**; 1.20 → 67% |
+| ✅ **`frequency_penalty: 0.3`** | **0 failures in 12 calls** |
+
+**Never leave Qwen3.8-27B on its default effort.** And `frequency_penalty: 0.3` is the reported mitigation — chosen over `repetition_penalty` precisely because it is an OpenAI-standard field, so it survives stacks that silently drop `repetition_penalty`.
+
+This inverts the usual intuition. Combined with the overthinking literature — accuracy follows an **inverted-U** against chain-of-thought length, not a monotonic curve ([LESS, ICLR 2026](https://proceedings.iclr.cc/paper_files/paper/2026/file/ce916251b4fe04f54f99c8d304d68877-Paper-Conference.pdf); [When More Thinking Hurts](https://aclanthology.org/2026.findings-acl.1199.pdf)) — the practical rule is: **more reasoning effort is not more signal. It is often less.**
+
+### How reasoning mutates your context
+
+Three ways, in ascending order of damage:
+
+1. **Thinking tokens live inside the context window.** Reasoning is emitted between `reasoning_start_str` and `reasoning_end_str` and occupies real KV cache. A 15K-token think at `high` is 15K tokens of your window.
+2. **`preserve_thinking` re-injects prior reasoning into later turns.** Qwen3.8 exposes this flag; when on, historical `reasoning_content` is carried forward. Across a 20-turn document session that compounds badly — you are re-feeding scratchpad as if it were evidence.
+3. **Hard truncation.** If `thinking_token_budget` fires mid-thought, the model is forced to emit its end-token and answer *before it has concluded*. The result is a fluent, confident, unverified answer. This is the worst failure mode and it is silent.
+
+**Countermeasure for (2) and (3):** when you replay history to the model, send **only `content`, never past `reasoning_content`**. Reasoning is a scratchpad, not state. If your framework round-trips assistant messages verbatim, it is silently inflating your context and your cost.
+
+### Good news: context is cheap on a 96 GB card
+
+KV bytes/token = `2 × full-attention layers × kv_heads × head_dim × bytes_per_elem`. Hybrid-attention models only cache KV for their **full-attention** layers — the rest hold fixed-size recurrent state.
+
+| Model | Full-attn layers | KB/token fp16 | KB/token fp8 | Full 262K window (fp8 KV) |
+|---|---|---|---|---|
+| **Kolibri-1** | 10 of 50 (4 sliding : 1 full) | 20 | 10 | **2.6 GB** |
+| **Qwen3-Coder-Next** | 12 of 48 (3 linear : 1 full) | 24 | 12 | **3.1 GB** |
+| **Qwen3.8-27B** | 16 of 64 (3 linear : 1 full) | 64 | 32 | **8.4 GB** |
+| Nemotron 3 Super | 88 of 88 (all full) | 88 | 44 | 11.5 GB |
+
+Weights + a **complete 262,144-token window**:
+
+| Config | Weights | KV (fp8) | Total | Spare | Full-length sessions |
+|---|---|---|---|---|---|
+| Laguna XS 2.1 @NVFP4 | 18.5 GB | 21.0 GB | 39.5 GB | 56.5 GB | 2 |
+| Kolibri-1 @NVFP4 | 45.0 GB | **2.6 GB** | 47.6 GB | 48.4 GB | **~18** |
+| Qwen3-Coder-Next @NVFP4 | 45.5 GB | 3.1 GB | 48.6 GB | 47.4 GB | ~15 |
+| Qwen3.8-27B @Q4 | 16.0 GB | 8.4 GB | 24.4 GB | 71.6 GB | ~8 |
+| Qwen3.8-27B @BF16 | 55.0 GB | 8.4 GB | 63.4 GB | 32.6 GB | ~3 |
+| Nemotron 3 Super @NVFP4 | 67.0 GB | 11.5 GB | 78.5 GB | 17.5 GB | 1 |
+
+**Context is not your bottleneck.** On a 96 GB card a full-length 262K session costs single-digit GB of KV, and you can hold many concurrently. The binding constraints are `max_model_len` policy and decode throughput — not VRAM.
+
+*(Laguna XS / 35B-A3B show 21 GB because they are 40-layer full-attention GQA models, not hybrid — priced at 8 KV heads × 128 head_dim.)*
+
+### Minimum-signal-loss playbook
+
+1. **Never run at the default effort.** Set `reasoning_effort` explicitly on every request. On Qwen3.8-27B, `low` and `medium` are ~4.7× more reliable than the `xhigh` default.
+2. **Route by task class, not by one global setting.** `low`/off for extraction, classification, and lookup. `medium` for synthesis. Reserve `high` for genuinely multi-step reasoning — and on Qwen3.8-27B treat `xhigh` as unusable.
+3. **Set `frequency_penalty: 0.3`.** Best reported mitigation for empty completions, and it's an OpenAI-standard field so it survives most stacks.
+4. **Never use `temperature: 0`** on Qwen3.8-27B — 100% empty-completion rate. If you need determinism, pin a seed at low temperature instead.
+5. **Keep `repetition_penalty` in 1.05–1.10** or leave it at 1.0; outside that band failure rates go to 100%/67%.
+6. **Strip `reasoning_content` from replayed history.** Send only `content`. This is the single biggest lever on context mutation.
+7. **Set `preserve_thinking: false`** for document work, where carried-forward scratchpad actively corrupts evidence.
+8. **Budget the window explicitly:** `document + reserved_think_budget + max_answer + safety`. Pass `max_model_len` to the server rather than accepting the 262K default, so runaway thinking hits a predictable error instead of a truncated answer.
+9. **Prefer a hard `thinking_token_budget` over template-level `effort`** when you need a guaranteed ceiling — but pin a vLLM version without the known re-entry bug ([#43757](https://github.com/vllm-project/vllm/pull/43757)), and note `thinking_token_budget` is still rejected on the V2 model runner unless you set `VLLM_USE_V2_MODEL_RUNNER=0`.
+10. **Use fp8 KV cache, not q4_0, when fidelity matters.** Quantising KV throws away exactly the long-range attention signal that long documents depend on. You have the VRAM for fp8.
+11. **Cache the document prefix.** Put the stable document + instructions first so the prefix cache hit rate is high; thinking tokens are not cacheable, the prefix is.
+12. **Measure the inverted-U on your own workload.** The peak is task-specific. Run 50 real prompts at `low`/`medium`/`high` and pick the knee — don't inherit a default.
 
 ---
 
@@ -274,7 +375,8 @@ These are the models you can't fit on these cards. **Prices verified against the
 - **t/s are bandwidth-scaled estimates** from measured 3090 baselines (×1.92 for 5090/PRO 6000, ×1.08 for 4090, ×1.03 for 6000 Ada), assuming the runtime streams only routed + shared experts for MoE and full weights for dense. Real numbers will be lower where KV cache or attention becomes significant at long context.
 - **Quant changes the answer, not just the size.** Every figure above states its quant. The same card swings from ~200 t/s at NVFP4 to ~30 t/s at BF16.
 - **NVFP4 requires vLLM or TensorRT-LLM.** The GGUF/Ollama path does not use it.
-- **Run costs are user-specified estimates**, not vendor pricing: 0.18–0.22 (3090), 0.22–0.27 (4090), 0.30–0.40 (5090), 0.70 (6000 Ada), 0.80–1.10 (PRO 6000, 600 W-class). Adjust to your actual electricity rate — all $/1M figures scale linearly with it.
+- **Run costs are user-specified**, not vendor pricing: 0.18–0.22 (3090), 0.22–0.27 (4090), 0.30–0.40 (5090), 0.70 (6000 Ada), **1.29 (PRO 6000 rental rate)**. All $/1M figures scale linearly with these. PRO 6000 figures assume 24/7 billing — if you can switch the card off when idle, utilisation climbs and cost per token falls proportionally.
+- **KV-cache figures are computed, not measured**, from each model's `config.json` (`num_hidden_layers`, `num_key_value_heads`, `head_dim`, `layer_types`) assuming 2 tensors × fp16/fp8. Models with `linear_attention` or bounded `sliding_window` layers only cache KV for their full-attention layers; verify against your engine's actual reported KV usage.
 - **Benchmarks are vendor-reported** and harness-dependent. SWE-bench Verified varies by agent scaffold and turn budget; **differences under ~2 points are not meaningful.** Terminal-Bench **2.0 and 2.1 are different benchmarks** and appear in the wild interleaved.
 - **Verify before you build.** Check fit and speed with `ollama ps` (confirm 100% GPU offload) or your engine's own metrics on the actual card. `nvidia-smi --query-gpu=memory.total` for real VRAM.
 - **Prices** are OpenRouter list rates as of 2026-10-04 and move frequently. DeepSeek uses off-peak/peak time-of-day billing.
@@ -285,5 +387,7 @@ These are the models you can't fit on these cards. **Prices verified against the
 
 - NVIDIA datasheets: [RTX PRO 6000 Blackwell Workstation Edition](https://www.nvidia.com/content/dam/en-zz/Solutions/data-center/rtx-pro-6000-blackwell-workstation-edition/workstation-blackwell-rtx-pro-6000-workstation-edition-nvidia-us-3519208-web.pdf) · [RTX PRO 6000 Blackwell Server Edition](https://www.nvidia.com/en-us/data-center/rtx-pro-6000-blackwell-server-edition/) · [RTX 5090](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/)
 - [OpenRouter models API](https://openrouter.ai/api/v1/models) — pricing, context windows, retrieved 2026-10-04
+- Reasoning effort: [QwenLM/Qwen3.8 issue #216 — empty completions at xhigh](https://github.com/QwenLM/Qwen3.8/issues/216) · [vLLM Reasoning Outputs](https://docs.vllm.ai/en/stable/features/reasoning_outputs/) · [vLLM #43757 thinking_token_budget re-entry fix](https://github.com/vllm-project/vllm/pull/43757) · [QwenLM/qwen-code #8488 effort/knob conflict](https://github.com/QwenLM/qwen-code/pull/8488)
+- Overthinking: [LESS, ICLR 2026 — inverted-U accuracy vs CoT length](https://proceedings.iclr.cc/paper_files/paper/2026/file/ce916251b4fe04f54f99c8d304d68877-Paper-Conference.pdf) · [When More Thinking Hurts (ACL Findings 2026)](https://aclanthology.org/2026.findings-acl.1199.pdf)
 - Model cards: [Kolibri-1](https://huggingface.co/Aleph-Alpha/Kolibri-1) · [Qwen3-Coder-Next](https://huggingface.co/Qwen/Qwen3-Coder-Next) + [tech report](https://arxiv.org/html/2603.00729) · [Ornith-1.5-35B-A3B](https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B) · [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) · [Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) · [Nemotron 3.5 Lightning](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) · [Nemotron 3 Super](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8) · [Laguna XS 2.1](https://huggingface.co/poolside/Laguna-XS-2.1) · [Laguna S 2.1](https://huggingface.co/poolside/Laguna-S-2.1) · [Gemma 4 31B](https://huggingface.co/google/gemma-4-31B-it) · [Gemma 4 26B A4B](https://huggingface.co/google/gemma-4-26B-A4B-it) · [GLM-5.2](https://huggingface.co/zai-org/GLM-5.2) · [GLM-4.7-Flash](https://huggingface.co/zai-org/GLM-4.7-Flash) · [Kimi K3](https://huggingface.co/moonshotai/Kimi-K3)
 - SWE-bench Verified cross-check: [vals.ai](https://www.vals.ai/benchmarks/swebench) · [Benchmark Atlas](https://atlas.kevinhu.io/benchmarks/swe-bench-verified) · [BenchLeader](https://www.benchleader.com/benchmarks/vals_swebench)
